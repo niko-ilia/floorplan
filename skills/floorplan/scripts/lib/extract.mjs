@@ -186,12 +186,17 @@ function extractJs(src, filePath) {
     if (!/^(app|server|fastify|hono|routes?|[a-z]*Router|router)$/.test(m[1])) continue;
     routes.push({ method: m[2].toUpperCase(), path: m[3], var: m[1], line: at(m.index) });
   }
+  // router.use(auth) with no path guards every router mounted on that receiver after it
+  const pathless = [...all(/\b([A-Za-z_$][\w$]*)\.use\(\s*([A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*)\s*\)/g, code)]
+    .map((m) => ({ on: m[1], at: m.index, names: m[2].split(',').map((x) => x.trim().split('.').pop()) }));
+  const priorMw = (on, at) => pathless.filter((u) => u.on === on && u.at < at).flatMap((u) => u.names);
   for (const m of all(/\b([A-Za-z_$][\w$]*)\.(use|route)\(\s*["'`](\/[^"'`]*)["'`]\s*,([^\n;]*)/g, code)) {
     const req = /require\(\s*["']([^"']+)["']\s*\)/.exec(m[4]);
     const mw = (m[4].split(',').map((s) => s.trim()).filter((s) => /^[A-Za-z_$][w$.]*$/.test(s))).map((s) => s.split('.').pop());
-    if (req) { mounts.push({ prefix: m[3], spec: req[1], line: at(m.index), ...(mw.length ? { mw } : {}) }); continue; }
+    if (req) { mounts.push({ prefix: m[3], spec: req[1], on: m[1], line: at(m.index), ...(mw.length ? { mw } : {}) }); continue; }
     const args = m[4].replace(/\)\s*$/, '').split(',').map((s) => s.trim()).filter((s) => /^[A-Za-z_$][\w$.]*$/.test(s));
-    if (args.length) mounts.push({ prefix: m[3], var: args[args.length - 1], line: at(m.index), ...(args.length > 1 ? { mw: args.slice(0, -1).map((s) => s.split('.').pop()) } : {}) });
+    const mwAll = [...priorMw(m[1], m.index), ...args.slice(0, -1).map((s) => s.split('.').pop())];
+    if (args.length) mounts.push({ prefix: m[3], var: args[args.length - 1], on: m[1], line: at(m.index), ...(mwAll.length ? { mw: mwAll } : {}) });
   }
 
   // Next.js app/pages API routes, derived from the file path

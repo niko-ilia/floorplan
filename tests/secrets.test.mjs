@@ -39,6 +39,17 @@ test('placeholders, values read from the environment and public settings are not
   assert.deepEqual(secrets('s3_secret_key = "env(S3_SECRET_KEY)"\n', 'supabase/config.toml', 'toml'), []);
 });
 
+test('stand-in values that name their environment are not flagged', () => {
+  // a CI job's throwaway settings, e.g. RESET_PASSWORD_SECRET: ci-only-reset-secret
+  assert.deepEqual(secrets(['  JWT_SECRET: ci-only-jwt-secret', '  RESET_PASSWORD_' + 'SECRET: ci-only-reset-secret', '  API_KEY: dev_key_for_tests'].join('\n'), '.github/workflows/ci.yml', 'yaml'), []);
+  // a test's fake token keeps the real prefix but not the shape
+  const slack = 'xox' + 'b-';
+  assert.deepEqual(secrets(`const TOKEN = '${slack}test-token';`, 'tests/notify.test.ts', 'typescript'), []);
+  // a real-shaped token is still flagged in a test file
+  const real = slack + '1234567890' + '-0987654321' + '-aBcDeFgHiJkLmNoPqRsTuV';
+  assert.equal(secrets(`const TOKEN = '${real}';`, 'tests/notify.test.ts', 'typescript').length, 1);
+});
+
 test('tokens that are public by design are not flagged (#23)', () => {
   const hex = [...Array(32)].map((_, i) => '01234567890abcdef'[(i * 7 + 3) % 16]).join('');
   // Cloudflare Web Analytics' beacon token has to be in the page for analytics to work

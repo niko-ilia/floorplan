@@ -20,7 +20,7 @@ function mountTarget(f, mount) {
   if (f.lang !== 'python') {
     // JS: match the mounted name to the local binding of an import or require (every router can be called `router`)
     const imp = imports.find((i) => i.locals && Object.hasOwn(i.locals, head));
-    return { file: imp ? imp.files[0] : f.path, v: '*' };
+    return imp ? { file: imp.files[0], v: '*' } : { file: f.path, v: head };
   }
   // First the import that binds the mounted name in this file: `from app.routes import campaigns as
   // campaign_routes` binds campaign_routes (not campaigns), and wins over `from app.platform import pricing`
@@ -52,7 +52,7 @@ export function resolveRoutes(files) {
     const t = mountTarget(f, mount);
     if (!t) continue;
     if (!mountsTo.has(t.file)) mountsTo.set(t.file, []);
-    mountsTo.get(t.file).push({ from: f.path, v: t.v, prefix: mount.prefix, mw: mount.mw || [] });
+    mountsTo.get(t.file).push({ from: f.path, v: t.v, on: mount.on, prefix: mount.prefix, mw: mount.mw || [] });
   }
   // Every prefix a file's routes live under, composing nested mounts (a router mounted into a router
   // that is itself mounted), e.g. app.use('/api', api) + api.use('/users', users) → /api/users.
@@ -61,7 +61,7 @@ export function resolveRoutes(files) {
     if (!ms.length || seen.has(file)) return [''];
     const next = new Set(seen).add(file);
     const out = [];
-    for (const m of ms) for (const p of m.from === file ? [''] : outerPrefixes(m.from, null, next)) out.push(joinPath(p, m.prefix));
+    for (const m of ms) for (const p of m.from === file ? [''] : outerPrefixes(m.from, m.on ?? null, next)) out.push(joinPath(p, m.prefix));
     return [...new Set(out)];
   };
 
@@ -72,7 +72,7 @@ export function resolveRoutes(files) {
     if (!ms.length || seen.has(file)) return [];
     const next = new Set(seen).add(file);
     // a route is only as protected as its least-protected mount
-    const each = ms.map((m) => [...m.mw, ...(m.from === file ? [] : mountMw(m.from, null, next))]);
+    const each = ms.map((m) => [...m.mw, ...(m.from === file ? [] : mountMw(m.from, m.on ?? null, next))]);
     return each.reduce((a, b) => a.filter((x) => b.includes(x)));
   };
 

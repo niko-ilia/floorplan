@@ -94,6 +94,8 @@ const mask = (v, password) => password || v.length < 12 ? `${v.length} character
 
 function valueLooksReal(v, name) {
   if (/\s/.test(v) || PLACEHOLDER.test(v)) return false;
+  // a value that names its own environment ("ci-only-jwt-secret", "dev_secret_key") is a stand-in
+  if (/(^|[-_.])(test|testing|ci|dev|local|dummy|fake|mock)([-_.]|$)/i.test(v)) return false;
   if (/^(none|null|nil|undefined|true|false|string|number|text|required|optional|bearer|basic|secret|token|password|test|dev|development|local|admin)$/i.test(v)) return false;
   if (/^[A-Z][A-Z0-9_]+$/.test(v)) return false;                 // the NAME of an env var
   if (/^env\([A-Za-z_][\w]*\)$/.test(v)) return false;           // Supabase config.toml reading one: "env(S3_SECRET_KEY)"
@@ -133,6 +135,8 @@ function findSecrets(src, f, out) {
     for (const m of src.matchAll(fm.re)) {
       const v = m[0];
       if (isTest && (!fm.live || fm.whole)) continue;
+      // test stand-ins keep the real prefix but not the shape: 'xoxb-test-token' (real tokens carry digits)
+      if (isTest && (!/\d/.test(v) || /(^|[-_.])(test|fake|dummy|mock)([-_.]|$)/i.test(v))) continue;
       if (!fm.whole && (/EXAMPLE|xxxx|XXXX|0{10,}/.test(v) || entropy(v) < 3)) continue;
       add(at(m.index), { what: fm.what, svc: fm.svc, sev: fm.sev || 'high', hint: fm.whole ? 'private key block' : mask(v) });
     }
@@ -328,7 +332,10 @@ function jsRoutes(src, f, out) {
     // the route call's own arguments: router.post('/x', requireAuth, async (req, res) => …)
     const head = lines.slice(r.line - 1, r.line + 4).join('\n');
     const args = (/\.\w+\(\s*["'`][^"'`]*["'`]\s*,([\s\S]*?)(?:async\s*)?(?:\(\s*req\b|function\b|\breq\s*=>|\(\s*\{|\(\s*c\s*\)|\(\s*ctx\b)/.exec(head)?.[1] || '');
-    const mw = (args.match(/[A-Za-z_$][\w$.]*/g) || []).map((x) => x.split('.').pop()).find(isGuardName);
+    // named handler (router.put('/:id', auth, updateTournament)): the regex above needs an inline one, so
+    // fall back to the call's identifiers minus the last, which is the handler
+    const named = args ? [] : (/\.\w+\(\s*["'`][^"'`]*["'`]\s*,([^()]*)\)/.exec(head)?.[1].match(/[A-Za-z_$][\w$.]*/g) || []).slice(0, -1);
+    const mw = (args ? args.match(/[A-Za-z_$][\w$.]*/g) || [] : named).map((x) => x.split('.').pop()).find(isGuardName);
     const next = routes[idx + 1]?.line || r.line + 60;
     const body = lines.slice(r.line - 1, Math.min(next - 1, r.line + 60)).join('\n');
     const prior = uses.find((u) => u.v === r.var && u.line < r.line);

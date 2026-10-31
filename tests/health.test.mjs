@@ -35,6 +35,18 @@ function openEndpoints(graph) {
     .sort();
 }
 
+test('Express: path-scoped middleware, parent-router checks and named handlers', () => {
+  const graph = buildFixture('express-mounts');
+  // app.use('/api/auth/login', authLimiter) is a rate limiter, not a router mount: no route gets that prefix
+  assert.deepEqual(graph.routes.map((r) => `${r.m} ${r.p}`).sort(), [
+    'DELETE /api/admin/users/:id', 'DELETE /api/items/:id', 'GET /api/items', 'GET /api/ping',
+    'POST /api/admin/users/:id/block', 'PUT /api/items/:id',
+  ]);
+  // router.use(auth) before router.use('/users', users) protects the users routes, and
+  // router.put('/:id', auth, updateItem) is protected though its handler is a named function
+  assert.deepEqual(openEndpoints(graph).filter((e) => !e.startsWith('GET')), ['DELETE /api/items/:id']);
+});
+
 test('FastAPI: Annotated dependency aliases count as sign-in checks (#4)', () => {
   const graph = buildFixture('fastapi-annotated');
   assert.ok(graph.routes.length >= 7, `expected the sample's 7 endpoints, found ${graph.routes.length}`);
