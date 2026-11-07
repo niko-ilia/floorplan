@@ -12,13 +12,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const scripts = path.join(here, '..', 'skills', 'floorplan', 'scripts');
 
 /** Copies a fixture to a temp folder, maps it as one module, and returns the built graph. */
-function buildFixture(name) {
+function buildFixture(name, health) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `floorplan-${name}-`));
   fs.cpSync(path.join(here, 'fixtures', name), root, { recursive: true });
   fs.mkdirSync(path.join(root, 'floorplan'));
   fs.writeFileSync(path.join(root, 'floorplan', 'architecture.json'), JSON.stringify({
     project: { name, summary: 'Test fixture.' },
     nodes: [{ id: 'api', label: 'Server', kind: 'service', summary: 'The sample server.', paths: ['**'] }],
+    health,
   }));
   for (const s of ['scan.mjs', 'build.mjs']) execFileSync(process.execPath, [path.join(scripts, s), root, '--no-claude-md'], { stdio: 'pipe' });
   const graph = JSON.parse(fs.readFileSync(path.join(root, 'floorplan', 'graph.json'), 'utf8'));
@@ -45,6 +46,17 @@ test('Express: path-scoped middleware, parent-router checks and named handlers',
   // router.use(auth) before router.use('/users', users) protects the users routes, and
   // router.put('/:id', auth, updateItem) is protected though its handler is a named function
   assert.deepEqual(openEndpoints(graph).filter((e) => !e.startsWith('GET')), ['DELETE /api/items/:id']);
+});
+
+test('Accepted findings: an endpoint or a whole issue is hidden, a stale entry is reported', () => {
+  const graph = buildFixture('express-mounts', { accepted: [
+    { endpoint: 'DELETE /api/items/:id', reason: 'public on purpose' },
+    { endpoint: 'GET /api/gone', reason: 'removed since' },
+    { issue: 'large-files', reason: 'no-op: there is no such issue here' },
+  ] });
+  assert.ok(!openEndpoints(graph).includes('DELETE /api/items/:id'));
+  assert.deepEqual(graph.health.accepted.map((x) => x.ref), ['DELETE /api/items/:id']);
+  assert.deepEqual(graph.health.stale, ['GET /api/gone', 'large-files']);
 });
 
 test('FastAPI: Annotated dependency aliases count as sign-in checks (#4)', () => {

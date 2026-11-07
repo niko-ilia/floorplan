@@ -544,6 +544,11 @@ const plural = (n, w, ws) => `${n} ${n === 1 ? w : ws || w + 's'}`;
 
 export function buildHealth({ graph, scan, arch, root }) {
   const issues = [];
+  // Findings the owner reviewed and accepted as intended: { endpoint: 'METHOD /path' } or { issue: '<issue id>' }, each with a reason
+  const accepted = (Array.isArray(arch?.health?.accepted) ? arch.health.accepted : []).filter((x) => (typeof x?.endpoint === 'string' || typeof x?.issue === 'string') && typeof x?.reason === 'string');
+  const acceptedUsed = new Set();
+  const acceptedEndpoint = new Map(accepted.filter((x) => x.endpoint).map((x) => [x.endpoint.trim().replace(/\s+/g, ' '), x]));
+  const acceptedIssue = new Map(accepted.filter((x) => x.issue).map((x) => [x.issue, x]));
   const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
   const fileByPath = new Map(graph.files.map((f) => [f.p, f]));
   const scanByPath = new Map(scan.files.map((f) => [f.path, f]));
@@ -974,6 +979,8 @@ export function buildHealth({ graph, scan, arch, root }) {
     if (stripeFiles.has(r.f) && (webhook || /stripe|payment|hook/i.test(r.p) || graph.routes.filter((x) => x.f === r.f && x.m !== 'GET').length === 1)) return;
     if (!webhook && PUBLIC_PATH.test(r.p.replace(/<[^>]*>|\{[^}]*\}|:\w+|\[[^\]]*\]/g, 'x'))) return;
     if (r.p === '/' && r.m === 'GET') return;
+    const ok = acceptedEndpoint.get(`${r.m} ${r.p}`);
+    if (ok) { acceptedUsed.add(ok); return; }
     const entry = { i, r, fnd, write: !['GET', 'ANY'].includes(r.m), webhook };
     if (fnd.misplaced) pr.misplaced.push(entry); else pr.open.push(entry);
   });
@@ -1135,10 +1142,16 @@ export function buildHealth({ graph, scan, arch, root }) {
 
   const KIND_ORDER = ['secret', 'public-env-secret', 'database-rules', 'stripe-webhook', 'env-file', 'unprotected-endpoint', 'cors', 'large-file', 'hardcoded-url', 'unused-file'];
   issues.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity] || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || (b.locations?.length || 0) - (a.locations?.length || 0));
-  const kept = issues.slice(0, 40);
+  const open = issues.filter((i) => { const ok = acceptedIssue.get(i.id); if (ok) acceptedUsed.add(ok); return !ok; });
+  const kept = open.slice(0, 40);
   const summary = { high: 0, medium: 0, low: 0 };
   for (const i of kept) summary[i.severity]++;
-  return { summary, issues: kept };
+  return {
+    summary, issues: kept,
+    accepted: accepted.filter((x) => acceptedUsed.has(x)).map((x) => ({ ref: x.endpoint || x.issue, reason: x.reason })),
+    // an acceptance that matches nothing any more: the endpoint or issue is gone or renamed
+    stale: accepted.filter((x) => !acceptedUsed.has(x)).map((x) => x.endpoint || x.issue),
+  };
 }
 
 /** Test mode, in Firestore/Storage rules (request.time < timestamp.date(Y, M, D)) or Realtime Database rules (now < ms). */

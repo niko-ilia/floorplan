@@ -18,6 +18,7 @@ Contents: [Top level](#top-level) · [nodes](#nodes) · [Assignment rules](#how-
 | `audience` | `"everyone"` \| `"developers"` | no | who names and descriptions are written for. Default `"everyone"`: plain language a non-technical owner understands (what it does for the business, in everyday words). `"developers"`: technical style for engineers |
 | `include` | string[] | no | file categories to map. Default `["code"]`. Others: `config`, `docs` |
 | `ignore` | string[] | no | globs for files to leave off the board entirely (generated code, vendored libs, fixtures) |
+| `health` | object | no | `accepted`: Health findings the owner reviewed and keeps on purpose. Each entry is `{ "endpoint": "METHOD /full/path", "reason": "…" }` (hides that one endpoint from the open-endpoint checks, so the rest of its file is still checked) or `{ "issue": "<issue id from graph.health>", "reason": "…" }` (hides a whole issue). `reason` is required. The build lists what it hid and warns about entries that match nothing any more |
 
 ## nodes
 

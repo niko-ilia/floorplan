@@ -461,11 +461,13 @@ if (scan.blueprint) { fs.mkdirSync(path.join(outDir, '.cache'), { recursive: tru
 function dataUri(name) { return 'data:image/png;base64,' + fs.readFileSync(path.join(SKILL_DIR, 'assets', name)).toString('base64'); }
 function escapeHtml(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
 
+if (graph.health?.stale?.length) report.push(`! health.accepted entries that match nothing now (remove them or fix the ref): ${graph.health.stale.join('; ')}`);
 const hs = graph.health?.summary;
 if (hs && (hs.high || hs.medium || hs.low)) {
   report.push(`${scan.blueprint ? 'DESIGN REVIEW' : 'HEALTH'}  ${hs.high} important · ${hs.medium} worth fixing · ${hs.low} minor`);
   for (const i of graph.health.issues.filter((x) => x.severity !== 'low').slice(0, 8)) report.push(`  [${i.severity}] ${i.title}`);
 }
+if (graph.health?.accepted?.length) report.push(`HEALTH ACCEPTED  ${graph.health.accepted.length} reviewed finding(s) hidden: ${graph.health.accepted.map((x) => x.ref).join('; ')}`);
 if (graph.screens?.length) report.push(`SCREENS  ${graph.screens.length} detected`);
 report.push(graph.recent
   ? `RECENT WORK  ${graph.recent.items.length} card(s) highlighted across ${graph.recent.tasks.length} task(s)`
