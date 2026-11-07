@@ -94,9 +94,11 @@ test('Accepted findings come back when a wrapped, CommonJS or default-exported h
   try {
     w('package.json', JSON.stringify({ name: 'p', type: 'module', dependencies: { express: '4' } }));
     w('server.js', `import express from 'express';\nimport r from './routes/api.js';\nconst app = express();\napp.use('/api', r);\napp.listen(3000);\n`);
+    w('services/a.js', `export async function loadA() { return { a: 1 }; }\n`);
     w('utils/wrap.js', `export const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);\n`);
     w('controllers/c.js', [
-      `export async function hA(req, res) { ${check}res.json({ a: 1 }); }`,
+      `import { loadA } from '../services/a.js';`,
+      `export async function hA(req, res) { ${check}res.json(await loadA()); }`,
       `export async function hB(req, res) { ${check}res.json({ b: 1 }); }`,
       `exports.hC = async (req, res) => { ${check}res.json({ c: 1 }); };`,
       `export default async function hG(req, res) { ${check}res.json({ g: 1 }); }`,
@@ -113,6 +115,10 @@ test('Accepted findings come back when a wrapped, CommonJS or default-exported h
     w('routes/api.js', routes.replace('export default router;', `// a new one\nrouter.get('/x', (req, res) => res.json([]));\nexport default router;`));
     graph = mapIt(root, pinned);
     assert.deepEqual(graph.health.accepted.map((x) => x.ref).sort(), eps);
+    // the service behind /h changes: only /h is shown again
+    w('services/a.js', `export async function loadA() { return { a: 1, secret: process.env.K }; }\n`);
+    graph = mapIt(root, pinned);
+    assert.deepEqual(graph.health.recheck.map((x) => x.ref), ['POST /api/h']);
     // the key check goes from every handler: every one is shown again
     const c = path.join(root, 'controllers', 'c.js');
     fs.writeFileSync(c, fs.readFileSync(c, 'utf8').replaceAll(check, ''));

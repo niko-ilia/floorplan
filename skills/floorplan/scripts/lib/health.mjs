@@ -1010,7 +1010,8 @@ export function buildHealth({ graph, scan, arch, root }) {
   };
   // The reviewed code of one route: the whole registration call, plus the definition of every function it names
   // (handlers, wrappers like asyncHandler(fn), middleware like verifySig or rateLimit(...)), the file's router-wide
-  // `.use(...)` checks above it, and checks added where its router is mounted.
+  // `.use(...)` checks above it, checks added where its router is mounted, and the functions those call.
+  // ponytail: two levels deep (route -> controller -> service); a change three calls down goes unnoticed
   const routeCode = (r) => {
     const src = srcOf(r.f);
     const start = src.split('\n').slice(0, r.l - 1).join('\n').length + (r.l > 1 ? 1 : 0);
@@ -1027,7 +1028,11 @@ export function buildHealth({ graph, scan, arch, root }) {
     const mounted = (scan.routes || []).find((x) => x.file === r.f && x.line === r.l && x.method === r.m)?.mountMw || [];
     const names = new Set([...[call, ...uses].flatMap((t) => stripStrings(t).slice(t.indexOf('(') + 1).match(/[A-Za-z_$][\w$]*/g) || []), ...mounted.filter((x) => typeof x === 'string')]);
     for (const k of NOT_NAMES) names.delete(k);
-    return [call, ...uses, ...[...names].sort().flatMap(definitionsOf)].join('\n');
+    const defs = [...names].sort().flatMap(definitionsOf);
+    // one level further: what those handlers and checks call (the service behind a thin controller)
+    const called = new Set(defs.flatMap((d) => [...stripStrings(d).matchAll(/([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1])));
+    for (const k of [...names, ...NOT_NAMES]) called.delete(k);
+    return [call, ...uses, ...defs, ...[...called].sort().flatMap(definitionsOf)].join('\n');
   };
   // one address can be registered in several files (a fallback binding): all of them count
   const endpointCode = (key) => fingerprint(graph.routes.filter((x) => `${x.m} ${x.p}` === key).map(routeCode).sort().join('\n'));
