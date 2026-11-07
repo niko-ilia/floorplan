@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1 (2026-11-07)
+
+- **Reviewed Health findings stay reviewed.** `health.accepted` in architecture.json lists findings the owner checked and keeps on purpose: one endpoint, or a whole issue, each with a reason. The finding is pinned to a fingerprint of the code that was reviewed (for an endpoint, its route call and every handler, wrapper and middleware it names, even in another file), so it stays hidden only until that code changes. Then it shows again with a note saying why. The build prints the fingerprint to copy in, and warns about entries that match nothing any more.
+- **Express:** routes get their full address when the router is mounted in another file, and a few sign-in checks Health missed are now recognised, which removes false alarms.
+
 ## 0.6.0 (2026-10-31)
 
 - **Health catches the classic mistakes in AI-built apps.** Five new checks, each in plain words with a fix to paste:

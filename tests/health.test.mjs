@@ -12,19 +12,29 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const scripts = path.join(here, '..', 'skills', 'floorplan', 'scripts');
 
 /** Copies a fixture to a temp folder, maps it as one module, and returns the built graph. */
-function buildFixture(name, health) {
+function buildFixture(name) {
+  const root = copyFixture(name);
+  const graph = mapIt(root);
+  fs.rmSync(root, { recursive: true, force: true });
+  return graph;
+}
+
+function copyFixture(name) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `floorplan-${name}-`));
   fs.cpSync(path.join(here, 'fixtures', name), root, { recursive: true });
   fs.mkdirSync(path.join(root, 'floorplan'));
+  return root;
+}
+
+/** Maps a copied fixture as one module (with an optional `health` section) and returns the built graph. */
+function mapIt(root, health) {
   fs.writeFileSync(path.join(root, 'floorplan', 'architecture.json'), JSON.stringify({
-    project: { name, summary: 'Test fixture.' },
+    project: { name: path.basename(root), summary: 'Test fixture.' },
     nodes: [{ id: 'api', label: 'Server', kind: 'service', summary: 'The sample server.', paths: ['**'] }],
     health,
   }));
   for (const s of ['scan.mjs', 'build.mjs']) execFileSync(process.execPath, [path.join(scripts, s), root, '--no-claude-md'], { stdio: 'pipe' });
-  const graph = JSON.parse(fs.readFileSync(path.join(root, 'floorplan', 'graph.json'), 'utf8'));
-  fs.rmSync(root, { recursive: true, force: true });
-  return graph;
+  return JSON.parse(fs.readFileSync(path.join(root, 'floorplan', 'graph.json'), 'utf8'));
 }
 
 /** "METHOD /path" for every endpoint Health reports as callable by anyone. */
@@ -48,15 +58,70 @@ test('Express: path-scoped middleware, parent-router checks and named handlers',
   assert.deepEqual(openEndpoints(graph).filter((e) => !e.startsWith('GET')), ['DELETE /api/items/:id']);
 });
 
-test('Accepted findings: an endpoint or a whole issue is hidden, a stale entry is reported', () => {
-  const graph = buildFixture('express-mounts', { accepted: [
-    { endpoint: 'DELETE /api/items/:id', reason: 'public on purpose' },
-    { endpoint: 'GET /api/gone', reason: 'removed since' },
-    { issue: 'large-files', reason: 'no-op: there is no such issue here' },
-  ] });
-  assert.ok(!openEndpoints(graph).includes('DELETE /api/items/:id'));
-  assert.deepEqual(graph.health.accepted.map((x) => x.ref), ['DELETE /api/items/:id']);
-  assert.deepEqual(graph.health.stale, ['GET /api/gone', 'large-files']);
+test('Accepted findings stay hidden only while the reviewed code is unchanged', () => {
+  const root = copyFixture('express-mounts');
+  try {
+    const del = 'DELETE /api/items/:id';
+    const accept = (code) => ({ accepted: [{ endpoint: del, reason: 'public on purpose', code }, { endpoint: 'GET /api/gone', reason: 'removed since' }] });
+    // not pinned yet: still shown, and the build hands over today's fingerprint
+    let graph = mapIt(root, accept(undefined));
+    assert.ok(openEndpoints(graph).includes(del));
+    const [pending] = graph.health.recheck;
+    assert.equal(pending.ref, del);
+    assert.equal(pending.status, 'unpinned');
+    assert.deepEqual(graph.health.stale, ['GET /api/gone']);
+    // pinned: hidden
+    graph = mapIt(root, accept(pending.code));
+    assert.ok(!openEndpoints(graph).includes(del));
+    assert.deepEqual(graph.health.accepted.map((x) => x.ref), [del]);
+    // the handler, in another file, changes: shown again, with a note saying why
+    const handlers = path.join(root, 'routes', 'itemHandlers.js');
+    fs.writeFileSync(handlers, fs.readFileSync(handlers, 'utf8').replace('res.status(204).end()', 'db.wipe() && res.status(204).end()'));
+    graph = mapIt(root, accept(pending.code));
+    assert.ok(openEndpoints(graph).includes(del));
+    assert.equal(graph.health.recheck[0].status, 'changed');
+    const issue = graph.health.issues.find((i) => i.items.some((id) => id.startsWith('r:') && `${graph.routes[+id.slice(2)].m} ${graph.routes[+id.slice(2)].p}` === del));
+    assert.match(Object.values(issue.notes).join(' '), /code changed since/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Accepted findings come back when a wrapped, CommonJS or default-exported handler changes, not when a neighbour does', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'floorplan-accept-'));
+  const w = (p, s) => { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), s); };
+  const check = 'if (req.query.k !== process.env.K) return res.sendStatus(403); ';
+  try {
+    w('package.json', JSON.stringify({ name: 'p', type: 'module', dependencies: { express: '4' } }));
+    w('server.js', `import express from 'express';\nimport r from './routes/api.js';\nconst app = express();\napp.use('/api', r);\napp.listen(3000);\n`);
+    w('utils/wrap.js', `export const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);\n`);
+    w('controllers/c.js', [
+      `export async function hA(req, res) { ${check}res.json({ a: 1 }); }`,
+      `export async function hB(req, res) { ${check}res.json({ b: 1 }); }`,
+      `exports.hC = async (req, res) => { ${check}res.json({ c: 1 }); };`,
+      `export default async function hG(req, res) { ${check}res.json({ g: 1 }); }`,
+    ].join('\n') + '\n');
+    const routes = `import { Router } from 'express';\nimport { asyncHandler } from '../utils/wrap.js';\nimport * as c from '../controllers/c.js';\nconst router = Router();\n` +
+      `router.post('/b', asyncHandler(c.hB));\nrouter.post('/c', c.hC);\nrouter.post('/g', c.hG);\nrouter.post('/h', rateLimit({ max: 5 }), c.hA);\nexport default router;\n`;
+    w('routes/api.js', routes);
+    fs.mkdirSync(path.join(root, 'floorplan'));
+    const eps = ['b', 'c', 'g', 'h'].map((x) => 'POST /api/' + x);
+    let graph = mapIt(root, { accepted: eps.map((endpoint) => ({ endpoint, reason: 'checks a key' })) });
+    const pinned = { accepted: graph.health.recheck.map((x) => ({ endpoint: x.ref, reason: 'checks a key', code: x.code })) };
+    assert.deepEqual(pinned.accepted.map((x) => x.endpoint).sort(), eps);
+    // a new route next door, with a comment above it, leaves the reviewed ones alone
+    w('routes/api.js', routes.replace('export default router;', `// a new one\nrouter.get('/x', (req, res) => res.json([]));\nexport default router;`));
+    graph = mapIt(root, pinned);
+    assert.deepEqual(graph.health.accepted.map((x) => x.ref).sort(), eps);
+    // the key check goes from every handler: every one is shown again
+    const c = path.join(root, 'controllers', 'c.js');
+    fs.writeFileSync(c, fs.readFileSync(c, 'utf8').replaceAll(check, ''));
+    graph = mapIt(root, pinned);
+    assert.deepEqual(graph.health.accepted, []);
+    assert.deepEqual(graph.health.recheck.map((x) => `${x.ref} ${x.status}`).sort(), eps.map((e) => `${e} changed`));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('FastAPI: Annotated dependency aliases count as sign-in checks (#4)', () => {

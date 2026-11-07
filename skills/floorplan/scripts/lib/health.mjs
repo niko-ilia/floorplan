@@ -9,6 +9,7 @@
 // buildHealth(ctx)       — called by build.mjs with { graph, scan, arch, root } after the graph is built.
 //                           Returns { summary: { high, medium, low }, issues: [...] }, stored as graph.health.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { git, compileGlob } from './common.mjs';
@@ -542,11 +543,55 @@ const SPECIAL_FILE = /(^|\/)(index|main|app|server|cli|manage|wsgi|asgi|__init__
 const USED_LANGS = new Set(['typescript', 'javascript', 'python', 'vue', 'svelte', 'astro']);
 const plural = (n, w, ws) => `${n} ${n === 1 ? w : ws || w + 's'}`;
 
+// Words in a route call that never name a function worth fingerprinting.
+const NOT_NAMES = new Set(['req', 'res', 'next', 'request', 'response', 'async', 'await', 'function', 'return', 'true', 'false', 'null', 'undefined', 'new', 'this', 'const', 'let', 'var', 'if', 'else', 'typeof', 'of', 'in']);
+
+/** `src` with string, template and comment contents blanked, same length, so offsets still line up. */
+function stripStrings(src) {
+  return src.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|(["'`])(?:\\[\s\S]|(?!\1)[^\\])*\1/g, (m) => m.replace(/[^\n]/g, ' '));
+}
+
+/** Index just past the bracket group that opens at src[open], skipping strings and comments. */
+// ponytail: no regex-literal or nested-template awareness; a ")" inside one can end the group early
+function groupEnd(src, open) {
+  const t = stripStrings(src);
+  let depth = 0;
+  for (let i = open; i < t.length; i++) {
+    if ('({['.includes(t[i])) depth++;
+    else if (')}]'.includes(t[i]) && --depth === 0) return i + 1;
+  }
+  return t.length;
+}
+
+/** Index just past the statement or member that starts at `from`: a `;`, a `,` or `}` closing the enclosing
+ *  object or class, or a line end once its brackets are balanced and nothing continues it. */
+function statementEnd(src, from) {
+  const t = stripStrings(src);
+  let depth = 0, closed = false;
+  for (let i = from; i < t.length; i++) {
+    const c = t[i];
+    if ('({['.includes(c)) depth++;
+    else if (')}]'.includes(c)) { if (--depth < 0) return i; if (depth === 0) closed = true; }
+    else if (depth === 0 && (c === ';' || (c === ',' && closed))) return i + 1;
+    else if (depth === 0 && c === '\n' && closed && !/(=>|[=(,{[+\-*/?:&|.])\s*$/.test(t.slice(from, i)) && !/^\s*[.?:]/.test(t.slice(i + 1, i + 200))) return i;
+  }
+  return t.length;
+}
+
 export function buildHealth({ graph, scan, arch, root }) {
   const issues = [];
-  // Findings the owner reviewed and accepted as intended: { endpoint: 'METHOD /path' } or { issue: '<issue id>' }, each with a reason
+  // Findings the owner reviewed and accepted as intended: { endpoint: 'METHOD /path' } or { issue: '<issue id>' }, each with
+  // a reason and the `code` fingerprint of what was reviewed. A finding stays hidden only while its code still matches, so a
+  // later change (say, someone drops a check inside the handler) brings it back for another look.
   const accepted = (Array.isArray(arch?.health?.accepted) ? arch.health.accepted : []).filter((x) => (typeof x?.endpoint === 'string' || typeof x?.issue === 'string') && typeof x?.reason === 'string');
   const acceptedUsed = new Set();
+  const acceptedHits = new Map(); // entry -> { code, status: 'ok' | 'unpinned' | 'changed' }
+  const judge = (entry, code) => {
+    acceptedUsed.add(entry);
+    const status = !entry.code ? 'unpinned' : entry.code === code ? 'ok' : 'changed';
+    acceptedHits.set(entry, { code, status });
+    return status === 'ok';
+  };
   const acceptedEndpoint = new Map(accepted.filter((x) => x.endpoint).map((x) => [x.endpoint.trim().replace(/\s+/g, ' '), x]));
   const acceptedIssue = new Map(accepted.filter((x) => x.issue).map((x) => [x.issue, x]));
   const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
@@ -946,6 +991,46 @@ export function buildHealth({ graph, scan, arch, root }) {
   // or app.include_router(admin.router, dependencies=[Depends(require_admin)]) (a database session isn't one)
   const mountGuard = new Map((scan.routes || []).filter((r) => r.mountMw?.some(isGuardDep)).map((r) => [`${r.file}|${r.line}|${r.method}`, r.mountMw.find(isGuardDep)]));
   const perRepo = new Map(); // repo -> { guarded, open: [], guardCounts }
+  const reviewAgain = new Map(); // 'r:<i>' -> accepted entry whose code no longer matches
+  const srcCache = new Map();
+  const srcOf = (p) => { if (!srcCache.has(p)) { let s = ''; try { s = fs.readFileSync(path.join(root, p), 'utf8'); } catch { /* gone or unreadable: fingerprints as empty */ } srcCache.set(p, s); } return srcCache.get(p); };
+  const fingerprint = (s) => crypto.createHash('sha1').update(s.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 10);
+  const jsFiles = scan.files.filter((f) => /^(typescript|javascript)$/.test(f.lang || '') && !TEST_FILE.test(f.path));
+  const defCache = new Map();
+  // Every definition of a function, middleware or method with this name in the project's JS/TS, whole.
+  // ponytail: found by name, not by resolving imports, so two functions with one name both count (extra re-checks, never a miss)
+  const definitionsOf = (name) => {
+    if (defCache.has(name)) return defCache.get(name);
+    const n = name.replace(/[$]/g, '\\$&');
+    const def = new RegExp(`^[ \\t]*(?:(?:export\\s+(?:default\\s+)?)?(?:async\\s+)?function\\s*\\*?\\s*${n}\\b|(?:export\\s+)?(?:const|let|var)\\s+${n}\\s*(?::[^=\\n]+)?=|(?:module\\.)?exports\\.${n}\\s*=|(?:(?:public|private|protected|static|async|readonly)\\s+)*${n}\\s*(?:<[^>\\n]*>)?\\s*\\([^)\\n]*\\)\\s*(?::[^{\\n]+)?\\{|${n}\\s*:\\s*(?:async\\s*)?(?:function\\b|\\(|[A-Za-z_$][\\w$]*\\s*=>))`, 'gm');
+    const out = [];
+    for (const f of jsFiles) { const src = srcOf(f.path); for (const m of src.matchAll(def)) out.push(src.slice(m.index, statementEnd(src, m.index))); }
+    defCache.set(name, out.sort());
+    return defCache.get(name);
+  };
+  // The reviewed code of one route: the whole registration call, plus the definition of every function it names
+  // (handlers, wrappers like asyncHandler(fn), middleware like verifySig or rateLimit(...)), the file's router-wide
+  // `.use(...)` checks above it, and checks added where its router is mounted.
+  const routeCode = (r) => {
+    const src = srcOf(r.f);
+    const start = src.split('\n').slice(0, r.l - 1).join('\n').length + (r.l > 1 ? 1 : 0);
+    const lang = scanByPath.get(r.f)?.lang;
+    if (!/^(typescript|javascript)$/.test(lang || '')) {
+      // Python and the rest: the decorator and the function under it, up to the next route in the file
+      const next = graph.routes.filter((x) => x.f === r.f && x.l > r.l).map((x) => x.l).sort((a, b) => a - b)[0];
+      return src.split('\n').slice(r.l - 1, next ? next - 1 : undefined).join('\n');
+    }
+    const open = /^[^\n]*?\.\w+\s*\(/.exec(src.slice(start));
+    const call = open ? src.slice(start, groupEnd(src, start + open[0].length - 1)) : src.slice(start).split('\n')[0];
+    const before = src.slice(0, start);
+    const uses = [...before.matchAll(/\b\w+\.use\s*\(/g)].map((m) => before.slice(m.index, groupEnd(before, m.index + m[0].length - 1)));
+    const mounted = (scan.routes || []).find((x) => x.file === r.f && x.line === r.l && x.method === r.m)?.mountMw || [];
+    const names = new Set([...[call, ...uses].flatMap((t) => stripStrings(t).slice(t.indexOf('(') + 1).match(/[A-Za-z_$][\w$]*/g) || []), ...mounted.filter((x) => typeof x === 'string')]);
+    for (const k of NOT_NAMES) names.delete(k);
+    return [call, ...uses, ...[...names].sort().flatMap(definitionsOf)].join('\n');
+  };
+  // one address can be registered in several files (a fallback binding): all of them count
+  const endpointCode = (key) => fingerprint(graph.routes.filter((x) => `${x.m} ${x.p}` === key).map(routeCode).sort().join('\n'));
   graph.routes.forEach((r, i) => {
     const fnd = routeFinding.get(`${r.f}|${r.l}|${r.m}`);
     if (!fnd) return; // framework we don't analyse: say nothing
@@ -980,7 +1065,8 @@ export function buildHealth({ graph, scan, arch, root }) {
     if (!webhook && PUBLIC_PATH.test(r.p.replace(/<[^>]*>|\{[^}]*\}|:\w+|\[[^\]]*\]/g, 'x'))) return;
     if (r.p === '/' && r.m === 'GET') return;
     const ok = acceptedEndpoint.get(`${r.m} ${r.p}`);
-    if (ok) { acceptedUsed.add(ok); return; }
+    if (ok && judge(ok, endpointCode(`${r.m} ${r.p}`))) return;
+    if (ok) reviewAgain.set('r:' + i, ok);
     const entry = { i, r, fnd, write: !['GET', 'ANY'].includes(r.m), webhook };
     if (fnd.misplaced) pr.misplaced.push(entry); else pr.open.push(entry);
   });
@@ -1142,15 +1228,26 @@ export function buildHealth({ graph, scan, arch, root }) {
 
   const KIND_ORDER = ['secret', 'public-env-secret', 'database-rules', 'stripe-webhook', 'env-file', 'unprotected-endpoint', 'cors', 'large-file', 'hardcoded-url', 'unused-file'];
   issues.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity] || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || (b.locations?.length || 0) - (a.locations?.length || 0));
-  const open = issues.filter((i) => { const ok = acceptedIssue.get(i.id); if (ok) acceptedUsed.add(ok); return !ok; });
+  const again = (x) => `${acceptedHits.get(x).status === 'changed' ? 'Accepted before, but its code changed since' : 'Accepted, but not pinned to its code yet'}, so check it again: ${x.reason}`;
+  const open = issues.filter((i) => {
+    const ok = acceptedIssue.get(i.id);
+    // a whole issue is pinned to which files and how many places it names, so a new one brings it back
+    if (ok && judge(ok, fingerprint(i.title + '\n' + (i.locations || []).length + '\n' + [...new Set((i.locations || []).map((l) => l.file))].sort().join('\n')))) return false;
+    if (ok) i.detail = `${again(ok)}. ${i.detail}`;
+    for (const [id, x] of reviewAgain) if (i.items?.includes(id)) i.notes = { ...i.notes, [id]: [i.notes?.[id], again(x)].filter(Boolean).join('. ') };
+    return true;
+  });
   const kept = open.slice(0, 40);
   const summary = { high: 0, medium: 0, low: 0 };
   for (const i of kept) summary[i.severity]++;
+  const refOf = (x) => x.endpoint || x.issue;
   return {
     summary, issues: kept,
-    accepted: accepted.filter((x) => acceptedUsed.has(x)).map((x) => ({ ref: x.endpoint || x.issue, reason: x.reason })),
+    accepted: accepted.filter((x) => acceptedHits.get(x)?.status === 'ok').map((x) => ({ ref: refOf(x), reason: x.reason })),
+    // accepted, but shown again: never pinned, or the code changed after the review. `code` is today's fingerprint.
+    recheck: accepted.filter((x) => acceptedHits.get(x) && acceptedHits.get(x).status !== 'ok').map((x) => ({ ref: refOf(x), ...acceptedHits.get(x) })),
     // an acceptance that matches nothing any more: the endpoint or issue is gone or renamed
-    stale: accepted.filter((x) => !acceptedUsed.has(x)).map((x) => x.endpoint || x.issue),
+    stale: accepted.filter((x) => !acceptedUsed.has(x)).map(refOf),
   };
 }
 

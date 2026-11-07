@@ -467,6 +467,7 @@ if (hs && (hs.high || hs.medium || hs.low)) {
   report.push(`${scan.blueprint ? 'DESIGN REVIEW' : 'HEALTH'}  ${hs.high} important · ${hs.medium} worth fixing · ${hs.low} minor`);
   for (const i of graph.health.issues.filter((x) => x.severity !== 'low').slice(0, 8)) report.push(`  [${i.severity}] ${i.title}`);
 }
+for (const x of graph.health?.recheck || []) report.push(`! health.accepted ${x.ref}: ${x.status === 'changed' ? 'its code changed since the review' : 'not pinned to its code'}, so it is shown again. Re-check it; if it is still fine, set "code": "${x.code}"`);
 if (graph.health?.accepted?.length) report.push(`HEALTH ACCEPTED  ${graph.health.accepted.length} reviewed finding(s) hidden: ${graph.health.accepted.map((x) => x.ref).join('; ')}`);
 if (graph.screens?.length) report.push(`SCREENS  ${graph.screens.length} detected`);
 report.push(graph.recent
