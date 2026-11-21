@@ -1,11 +1,11 @@
-# Floorplan 0.6.1: SHA-256 of every file the plugin runs from.
+# Floorplan 0.6.2: SHA-256 of every file the plugin runs from.
 # Check an installed copy: clone this release, then run node tools/checksums.mjs --check <installed folder>.
 43adc6c187150c4b0a4841f0e7448381401be93ee65e2d212be4e7eeb67bb3e4  .agents/plugins/marketplace.json
 fdce61be9c420fd16b8cbbff629baa37e8d1096094b3e90bc5ecc0fe1ffc3a78  .claude-plugin/icon.png
 98cd297588a52fc7715d29ad10636f3224ee7a99bfbb94230315493dabc7147c  .claude-plugin/marketplace.json
-7b27aee4483228ba9b90ef8a7e190b104edaca9a701892f4bfedb811816d1d1a  .claude-plugin/plugin.json
+a4fa6ea3141aca9ddd38d9f8d3d025a8975b8d2e27795449e2c3929df27026fc  .claude-plugin/plugin.json
 7bdb74d57875b25ca9dcd367f79f92b9089f5f4b873bffec898cc6c3f0a84a68  .codex-plugin/icon.png
-c18146dd7995ecb76bba35338e6a833ed6ad1b54090a3f74692f851d650a44ac  .codex-plugin/plugin.json
+c19b75d44d0030338e509f43d634fc0bcb6b828c8a3e140fafac5c9936e65ef5  .codex-plugin/plugin.json
 e1cdfc2a2f1ae41796c8eae54eed099f95d09d25f2ec521742d3ab7a8aba1337  package.json
 6e0c5f1017770ed049550730546718ab89dc62976fb5d298bf300b754e6e10a7  skills/floorplan/SKILL.md
 4dde86cace299094c246604badb73b605a10f47e01a72cc6746680788a7e20f9  skills/floorplan/agents/openai.yaml
@@ -13,7 +13,7 @@ e1cdfc2a2f1ae41796c8eae54eed099f95d09d25f2ec521742d3ab7a8aba1337  package.json
 60c5ef78ab48cb60fed2a3d712dc8b48c017245042bf7139d242844790f77f3c  skills/floorplan/assets/graph-query.js
 308b79d1680314b80350eaae04b8ad0c655bfb7a1fa2a2ef64b79e286469cc9b  skills/floorplan/assets/logo.png
 3e0cd257ebf5e6445772a6b2c8e90225b9d828b366e4f9010661cc222cf60518  skills/floorplan/assets/query-cli.mjs
-b9e1e5d64c62b74dff9becb4ac830fecdc4984d68d6180df380b4cc6cccfcd98  skills/floorplan/assets/serve.mjs
+7459f9aec7883d522f7a65f20a7de32c345d87442306aa207fb27d56e561e691  skills/floorplan/assets/serve.mjs
 9fb61d68fec54c44ff185c3ba4af4a85c1e54dd90d77ef7bc54c82f0a3c47215  skills/floorplan/assets/ui/05-theme.js
 741a145b38c7784a640cf107df2dcc09cbdef33753fe3e0088a43c7e3a343bda  skills/floorplan/assets/ui/06-blueprint.js
 c41b2ce2e0038cab208579eaeb541223d8175fade09ed360ba53a4c49956a9c3  skills/floorplan/assets/ui/10-glossary.js
@@ -31,12 +31,12 @@ b0745abd7f23cd91690a1587e377edbe19fd7233c783300290936720546216d4  skills/floorpl
 403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b  skills/floorplan/assets/vendor/fonts/jetbrains-mono-LICENSE.txt
 79bfdab9ba467e26eea4122e6f2567e188dd8a09a8c730d501fc487c4ab99c6e  skills/floorplan/assets/vendor/fonts/jetbrains-mono-latin-ext-wght-normal.woff2
 18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e  skills/floorplan/assets/vendor/fonts/jetbrains-mono-latin-wght-normal.woff2
-682e2bcd6e58c3c73b9a0443e72588815eec0c917e248e551020a73aaeef8587  skills/floorplan/assets/viewer.html
+5375823a696cf3acfa2e10c3dd9c5f44aea1f1b56bd9ba8a6206fd287ab0a83e  skills/floorplan/assets/viewer.html
 7972820de67d9db107295d5ff85c374fa7821248ee5cdef21ad43813c15f53f3  skills/floorplan/references/blueprint.md
 ac2460a6613956209895d970213630d9d99475745ba761fd842982e2f5ccec13  skills/floorplan/references/choosing-boundaries.md
 ee798903d2ddc1c7128615fc02e7556080472aaa3b4779548087431983d6fbd3  skills/floorplan/references/schema.md
 9805cbe487912b2995594fa3bd4fa7650fa963aee622558097d80b772965588a  skills/floorplan/references/writing-descriptions.md
-35f601b1ebb3b423f36662a511bbe701df04e8e2c2f01aec844658c321a73465  skills/floorplan/scripts/build.mjs
+6dce3f71e60eda1686d863557c25577d832074863ee1bfbf4854e0ac2ab20c24  skills/floorplan/scripts/build.mjs
 bb02ef4b60dafb05a74eb2561f22a530b5b17935783bd88731c5bea5b6d57609  skills/floorplan/scripts/describe.mjs
 3f1ed916b8e3e7fb240e3db04be86a5a3d57e2cb78fe5fd6100fcedc4edf2206  skills/floorplan/scripts/lib/agent.mjs
 0cd705247440591764a3387cd9ec0ddb80fe72887728dd4e4b92b6ef6077dc7e  skills/floorplan/scripts/lib/blueprint.mjs
