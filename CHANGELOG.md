@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.2 (2026-11-21)
 
 - **Security: comments in the mapped code can no longer run script in the map.** Text from the code (comments, docstrings, route docs) is put into the map as data, and a comment holding one of the map's template markers or `</script>` could break out of it and run script in the page, which under the map's server could reach its Ask and Flows endpoints. The data now goes in last and with every `<` escaped, in the built map and in exported copies, and the page carries a content security policy that blocks requests to other sites.
 
