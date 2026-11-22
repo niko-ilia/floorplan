@@ -9,12 +9,14 @@ import { spawn } from 'node:child_process';
 import { shopApp, scanAndBuild, cleanup } from './helpers.mjs';
 
 let root, server, base, token;
+// `$'` and `$&` mean something to String.replace: a model name holding them must reach the page as written
+const MODEL = "x$'y$&z";
 before(async () => {
   root = shopApp();
   scanAndBuild(root);
   const port = 20000 + Math.floor(Math.random() * 20000);
   // no Claude Code or Codex CLI and no waitlist card: this only exercises the server itself
-  server = spawn(process.execPath, [path.join(root, 'floorplan', 'serve.mjs'), '--port', String(port), '--no-open'], {
+  server = spawn(process.execPath, [path.join(root, 'floorplan', 'serve.mjs'), '--port', String(port), '--no-open', '--model', MODEL], {
     cwd: root, env: { ...process.env, FLOORPLAN_CLAUDE: path.join(root, 'no-such-cli'), FLOORPLAN_CODEX: path.join(root, 'no-such-cli'), FLOORPLAN_NO_PROMPTS: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   base = await new Promise((resolve, reject) => {
@@ -39,6 +41,13 @@ test('it listens on 127.0.0.1 only', () => {
 
 test('the page it serves carries a fresh token', () => {
   assert.match(token || '', /^[0-9a-f]{32}$/);
+});
+
+test('a model name with replacement patterns in it leaves the page intact', async () => {
+  const page = await (await fetch(base + '/')).text();
+  assert.equal(JSON.parse(/window\.FLOORPLAN_SERVER=(.*?);<\/script>/.exec(page)[1]).model, MODEL);
+  assert.equal(page.split('</html>').length, 2);
+  assert.equal(page.split('window.FLOORPLAN_SERVER=').length, 2);
 });
 
 test('API calls without the token are refused', async () => {

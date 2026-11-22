@@ -114,6 +114,22 @@ export function withPolicy(html, kind) {
   return clean.slice(0, head.index + head[0].length) + tag + clean.slice(head.index + head[0].length);
 }
 
+/**
+ * Health for a copy to share: without the reasons the owner gave for accepting findings, which are notes to self,
+ * also cut from the "check it again" notes health.mjs writes on findings shown again.
+ */
+export function withoutAcceptReasons(health) {
+  if (!health || !(health.accepted?.length || health.recheck?.length)) return health;
+  const reasons = [...health.accepted || [], ...health.recheck || []].map((x) => x.reason).filter(Boolean).sort((a, b) => b.length - a.length);
+  const cut = (s) => typeof s === 'string' ? reasons.reduce((t, r) => t.split(`so check it again: ${r}`).join('so check it again'), s) : s;
+  return {
+    ...health,
+    ...(health.issues ? { issues: health.issues.map((i) => ({ ...i, detail: cut(i.detail), ...(i.notes ? { notes: Object.fromEntries(Object.entries(i.notes).map(([k, v]) => [k, cut(v)])) } : {}) })) } : {}),
+    ...(health.accepted ? { accepted: health.accepted.map(({ reason, ...x }) => x) } : {}),
+    ...(health.recheck ? { recheck: health.recheck.map(({ reason, ...x }) => x) } : {}),
+  };
+}
+
 // ---------- editor links ----------
 // "Open in editor" is a link the browser hands to an editor, built from a template with {path} (the file's full
 // path), {line} and {column}. It can be set in architecture.json ("editor") or on the map's server (--editor), so

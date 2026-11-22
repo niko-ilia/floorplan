@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 // written next to this file by the build: how data goes into the page, and the page's Content-Security-Policy
-import { scriptJson, withPolicy, editorTemplate } from './page-safety.mjs';
+import { scriptJson, withPolicy, editorTemplate, withoutAcceptReasons } from './page-safety.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -72,7 +72,7 @@ function exportMap(include, extraFlows = []) {
   if (!on.includes('recent')) delete out.recent;
   if (!on.includes('health')) delete out.health;
   // dismissals made since the last build travel with the copy (the page applies them; no reasons, which are notes to self)
-  else if (out.health) { const list = readDismissed().map(({ reason, ...d }) => d); if (list.length) out.health = { ...out.health, dismissed: list }; else delete out.health.dismissed; }
+  else if (out.health) { out.health = withoutAcceptReasons(out.health); const list = readDismissed().map(({ reason, ...d }) => d); if (list.length) out.health = { ...out.health, dismissed: list }; else delete out.health.dismissed; }
   const json = scriptJson(out);
   const slug = String(g.project?.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'floorplan';
   // a copy to share talks to nothing: only its own scripts run (by hash), and it can't send anything anywhere
@@ -199,7 +199,7 @@ function load() {
   const c = new Function(`${coreSrc.replace(/^import .*$/gm, '')}; return { FLOORPLAN_ANSWER_SCHEMA, FLOORPLAN_FLOW_SCHEMA, FLOORPLAN_CHANGE_SCHEMA, floorplanAskInstructions, floorplanFlowInstructions, floorplanChangeInstructions, createGraphQuery };`)();
   c.q = c.createGraphQuery(g);
   // the served page's policy covers this script too, and lets the page talk to this server and nothing else
-  page = withPolicy(html.replace('</head>', inject + '</head>'), 'local');
+  page = withPolicy(html.replace('</head>', () => inject + '</head>'), 'local');
   G = g; core = c;
   // kinds of request: a question (answer + board), a new guided flow, and for a blueprint, a change to the
   // plan. Codex reads its schema from a file.

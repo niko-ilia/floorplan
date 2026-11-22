@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { compileGlob, globProblem, parseArgs, fmtNum, mapDir, keepOutOfGit, toPosix, unattendedMode, printJson, readJsonFile, notMapped } from './lib/common.mjs';
 import { fallbackFileName, fallbackRouteName, routeKey, jargonIn } from './lib/names.mjs';
 import { buildHealth, withDismissed, dismissalFor, maskSecrets } from './lib/health.mjs';
-import { scriptJson, scriptCode, withPolicy, editorTemplate } from '../assets/page-safety.mjs';
+import { scriptJson, scriptCode, withPolicy, editorTemplate, withoutAcceptReasons } from '../assets/page-safety.mjs';
 import { buildPlanHealth } from './lib/blueprint.mjs';
 import { buildScreens } from './lib/screens.mjs';
 import { writeClaudeMd } from './lib/claudemd.mjs';
@@ -117,6 +117,7 @@ const scrubFields = (obj, keys, file, where) => {
   if (Array.isArray(arch.flows)) arch.flows.forEach((f, i) => { scrubFields(f, ['title', 'description'], A, `flows[${i}]`); if (Array.isArray(f?.steps)) f.steps.forEach((s, j) => scrubFields(s, ['note'], A, `flows[${i}].steps[${j}]`)); });
   if (Array.isArray(arch.tour)) arch.tour.forEach((s, i) => scrubFields(s, ['title', 'note'], A, `tour[${i}]`));
   if (Array.isArray(arch.annotations)) arch.annotations.forEach((a, i) => scrubFields(a, ['note', 'tags'], A, `annotations[${i}]`));
+  if (Array.isArray(arch.health?.accepted)) arch.health.accepted.forEach((x, i) => scrubFields(x, ['reason'], A, `health.accepted[${i}]`));
 }
 // what the scan read from the code: comments and docstrings, and a blueprint's names and descriptions from plan.json
 for (const f of scan.files || []) {
@@ -647,8 +648,8 @@ const uiScripts = fs.existsSync(uiDir) ? fs.readdirSync(uiDir).filter((n) => n.e
 const html = withPolicy(page(graph), 'local');
 fs.writeFileSync(path.join(outDir, 'index.html'), html);
 // --artifact: a copy to publish to the Claude app, without this machine's absolute path (editor links)
-// (and without the reasons on dismissed health issues, which are notes to self)
-const sharedHealth = graph.health?.dismissed ? { ...graph.health, dismissed: graph.health.dismissed.map(({ reason, ...d }) => d) } : graph.health;
+// (and without the reasons on dismissed or accepted health issues, which are notes to self)
+const sharedHealth = withoutAcceptReasons(graph.health?.dismissed ? { ...graph.health, dismissed: graph.health.dismissed.map(({ reason, ...d }) => d) } : graph.health);
 if (args.artifact) fs.writeFileSync(path.join(outDir, 'artifact.html'), page({ ...graph, ...(sharedHealth ? { health: sharedHealth } : {}), meta: { ...graph.meta, root: null, agent: 'claude' } }));
 // Self-contained helpers next to the map: ask questions through the Claude Code CLI or Codex (serve.mjs)
 // and the graph lookups it hands to them (query.mjs). They need only Node, not this skill.

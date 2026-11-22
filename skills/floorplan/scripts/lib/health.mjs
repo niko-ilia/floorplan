@@ -2046,7 +2046,20 @@ export function buildHealth({ graph, scan, arch, root }) {
       return src.split('\n').slice(r.l - 1, next ? next - 1 : undefined).join('\n');
     }
     const open = /^[^\n]*?\.\w+\s*\(/.exec(src.slice(start));
-    const call = open ? src.slice(start, groupEnd(src, start + open[0].length - 1)) : src.slice(start).split('\n')[0];
+    // No call on the route line (a Nest @Post() decorator, an exported Serverless handler or Next.js route handler):
+    // the decorators around it and the whole function or method they mark, so a body edit still changes the fingerprint
+    const declared = () => {
+      let from = start;
+      while (from > 0) {
+        const lineStart = src.lastIndexOf('\n', from - 2) + 1;
+        if (!/^\s*@/.test(src.slice(lineStart, from))) break;
+        from = lineStart;
+      }
+      let i = start;
+      for (let m; (m = /^\s*@[\w$.]+\s*/.exec(src.slice(i)));) { i += m[0].length; if (src[i] === '(') i = groupEnd(src, i); }
+      return src.slice(from, statementEnd(src, i));
+    };
+    const call = open ? src.slice(start, groupEnd(src, start + open[0].length - 1)) : declared();
     const before = src.slice(0, start);
     const uses = [...before.matchAll(/\b\w+\.use\s*\(/g)].map((m) => before.slice(m.index, groupEnd(before, m.index + m[0].length - 1)));
     const mounted = (scan.routes || []).find((x) => x.file === r.f && x.line === r.l && x.method === r.m)?.mountMw || [];
@@ -2321,7 +2334,7 @@ export function buildHealth({ graph, scan, arch, root }) {
     summary, issues: kept, ...(appWide.size ? { appWide: [...appWide.values()] } : {}), checked: whatWasChecked({ graph, scan, perRepo, live, usesSupabase, supabaseTables, firebaseFiles, findings }),
     accepted: accepted.filter((x) => acceptedHits.get(x)?.status === 'ok').map((x) => ({ ref: refOf(x), reason: x.reason })),
     // accepted, but shown again: never pinned, or the code changed after the review. `code` is today's fingerprint.
-    recheck: accepted.filter((x) => acceptedHits.get(x) && acceptedHits.get(x).status !== 'ok').map((x) => ({ ref: refOf(x), ...acceptedHits.get(x) })),
+    recheck: accepted.filter((x) => acceptedHits.get(x) && acceptedHits.get(x).status !== 'ok').map((x) => ({ ref: refOf(x), ...acceptedHits.get(x), reason: x.reason })),
     // an acceptance that matches nothing any more: the endpoint or issue is gone or renamed
     stale: accepted.filter((x) => !acceptedUsed.has(x)).map(refOf),
   };
