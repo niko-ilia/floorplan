@@ -70,7 +70,7 @@ test('an exported copy keeps the comment as data', () => {
 
 test('the map declares a content security policy that allows no outside requests', () => {
   const html = fs.readFileSync(path.join(root, 'floorplan', 'index.html'), 'utf8');
-  const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(html)?.[1];
+  const csp = /<meta http-equiv="Content-Security-Policy"[^>]* content="([^"]+)">/.exec(html)?.[1];
   assert.ok(csp, 'a CSP meta tag');
   assert.match(csp, /default-src 'none'/);
   assert.match(csp, /connect-src 'self'(;|$)/);
