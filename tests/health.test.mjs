@@ -47,7 +47,7 @@ function openEndpoints(graph) {
 }
 
 test('Express: path-scoped middleware, parent-router checks and named handlers', () => {
-  const graph = buildFixture('express-mounts');
+  const graph = buildFixture('express-mount-prefixes');
   // app.use('/api/auth/login', authLimiter) is a rate limiter, not a router mount: no route gets that prefix
   assert.deepEqual(graph.routes.map((r) => `${r.m} ${r.p}`).sort(), [
     'DELETE /api/admin/users/:id', 'DELETE /api/items/:id', 'GET /api/items', 'GET /api/ping',
@@ -59,7 +59,7 @@ test('Express: path-scoped middleware, parent-router checks and named handlers',
 });
 
 test('Accepted findings stay hidden only while the reviewed code is unchanged', () => {
-  const root = copyFixture('express-mounts');
+  const root = copyFixture('express-mount-prefixes');
   try {
     const del = 'DELETE /api/items/:id';
     const accept = (code) => ({ accepted: [{ endpoint: del, reason: 'public on purpose', code }, { endpoint: 'GET /api/gone', reason: 'removed since' }] });
@@ -130,6 +130,71 @@ test('Accepted findings come back when a wrapped, CommonJS or default-exported h
   }
 });
 
+test('Accept reasons are secret-masked on the map and stay out of the copies to share', () => {
+  const root = copyFixture('express-mount-prefixes');
+  const token = 'ghp_' + 'aBcD' + '1e2F3g4H5i6J7k8L9m0N1o2P3q4R5s6T7u8V';
+  const reason = `Public on purpose, the caller sends ${token}`;
+  const del = 'DELETE /api/items/:id';
+  try {
+    // unpinned, so the finding is shown again with a "check it again" note that quotes the reason
+    mapIt(root, { accepted: [{ endpoint: del, reason }] });
+    execFileSync(process.execPath, [path.join(scripts, 'build.mjs'), root, '--no-claude-md', '--artifact'], { stdio: 'pipe' });
+    const read = (f) => fs.readFileSync(path.join(root, 'floorplan', f), 'utf8');
+    for (const f of ['graph.json', 'index.html']) {
+      assert.ok(!read(f).includes(token), `${f} holds the token`);
+      assert.match(read(f), /check it again: Public on purpose, the caller sends «hidden»/, f);
+    }
+    const out = path.join(root, 'shared.html');
+    execFileSync(process.execPath, [path.join(root, 'floorplan', 'serve.mjs'), '--export', out, '--include', 'flows,notes,recent,health'], { cwd: root, stdio: 'pipe' });
+    for (const [name, text] of [['artifact.html', read('artifact.html')], ['export', fs.readFileSync(out, 'utf8')]]) {
+      assert.ok(!text.includes('Public on purpose'), `${name} holds the reason`);
+      assert.match(text, /Accepted, but not pinned to its code yet, so check it again"/, `${name} still says to check it again`);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Accepted findings come back when a Nest, Serverless or Next.js handler body changes', () => {
+  const check = 'if (!process.env.K) throw new Error("no");';
+  const cases = {
+    nest: ['POST /orders', (k) => ({
+      'package.json': JSON.stringify({ name: 'p', dependencies: { '@nestjs/common': '10', '@nestjs/core': '10' } }),
+      'src/main.ts': `import { NestFactory } from '@nestjs/core';\nimport { AppModule } from './app.module';\nasync function b() { const app = await NestFactory.create(AppModule); await app.listen(3000); }\nb();\n`,
+      'src/app.module.ts': `import { Module } from '@nestjs/common';\nimport { OrdersController } from './orders.controller';\n@Module({ controllers: [OrdersController] })\nexport class AppModule {}\n`,
+      'src/orders.controller.ts': `import { Controller, Post, Body } from '@nestjs/common';\n\n@Controller('orders')\nexport class OrdersController {\n  @Post()\n  create(@Body() body: any) {\n    ${k}\n    return { ok: true };\n  }\n}\n`,
+    })],
+    serverless: ['POST /orders', (k) => ({
+      'package.json': JSON.stringify({ name: 'p', dependencies: { serverless: '3' } }),
+      'serverless.yml': `service: s\nprovider:\n  name: aws\nfunctions:\n  create:\n    handler: src/orders.create\n    events:\n      - http:\n          path: orders\n          method: post\n`,
+      'src/orders.ts': `export const create = async (event: any) => {\n  ${k}\n  return { statusCode: 200, body: '{}' };\n};\n`,
+    })],
+    next: ['POST /api/orders', (k) => ({
+      'package.json': JSON.stringify({ name: 'p', dependencies: { next: '15' } }),
+      'app/api/orders/route.ts': `export async function POST(req: Request) {\n  ${k}\n  return Response.json({ ok: true });\n}\n`,
+    })],
+  };
+  for (const [name, [endpoint, files]] of Object.entries(cases)) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `floorplan-accept-${name}-`));
+    const write = (k) => { for (const [p, s] of Object.entries(files(k))) { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), s); } };
+    try {
+      write(check);
+      fs.mkdirSync(path.join(root, 'floorplan'));
+      let graph = mapIt(root, { accepted: [{ endpoint, reason: 'checks a key' }] });
+      assert.deepEqual(graph.health.recheck.map((x) => x.ref), [endpoint], name);
+      const pinned = { accepted: [{ endpoint, reason: 'checks a key', code: graph.health.recheck[0].code }] };
+      graph = mapIt(root, pinned);
+      assert.deepEqual(graph.health.accepted.map((x) => x.ref), [endpoint], name);
+      write('');
+      graph = mapIt(root, pinned);
+      assert.deepEqual(graph.health.accepted, [], name);
+      assert.deepEqual(graph.health.recheck.map((x) => `${x.ref} ${x.status}`), [`${endpoint} changed`], name);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('FastAPI: Annotated dependency aliases count as sign-in checks (#4)', () => {
   const graph = buildFixture('fastapi-annotated');
   assert.ok(graph.routes.length >= 7, `expected the sample's 7 endpoints, found ${graph.routes.length}`);
@@ -137,6 +202,32 @@ test('FastAPI: Annotated dependency aliases count as sign-in checks (#4)', () =>
   // AdminUser (OwnedOffice) and an alias whose own name reads as a check (AdminAccess) are all protected;
   // routes with only a database session (SessionDep, SqlSessionDep over get_sql_session) aren't
   assert.deepEqual(openEndpoints(graph), ['POST /comments', 'POST /feedback']);
+});
+
+test('FastAPI: public readiness and liveness endpoints are not security warnings (#7)', () => {
+  const graph = buildFixture('fastapi-annotated');
+  const paths = graph.routes.map((r) => r.p);
+  assert.ok(paths.includes('/readyz'));
+  assert.ok(paths.includes('/livez'));
+  assert.ok(!openEndpoints(graph).includes('GET /readyz'));
+  assert.ok(!openEndpoints(graph).includes('GET /livez'));
+});
+
+test('FastAPI: a named guard dependency is not a public endpoint (#7)', () => {
+  const graph = buildFixture('fastapi-guard-name');
+  assert.deepEqual(openEndpoints(graph), ['POST /billing/open']);
+});
+
+test('FastAPI: header tokens are guarded only when the handler validates them (#7)', () => {
+  const graph = buildFixture('fastapi-header-guard');
+  assert.ok(graph.routes.some((r) => r.p === '/invites/checked'));
+  assert.deepEqual(openEndpoints(graph), ['POST /invites/unchecked']);
+});
+
+test('FastAPI: a signature validator in an imported helper protects the route (#7)', () => {
+  const graph = buildFixture('fastapi-signature-helper');
+  assert.ok(graph.routes.some((r) => r.p === '/webhook/verified'));
+  assert.deepEqual(openEndpoints(graph), ['POST /webhook/unverified']);
 });
 
 test('FastAPI: checks added where a router is included count as sign-in checks', () => {
@@ -148,4 +239,67 @@ test('FastAPI: checks added where a router is included count as sign-in checks',
   // even with a package also called staff imported first; so does a check beside a database session,
   // over several lines; a database session alone (orders) protects nothing
   assert.deepEqual(openEndpoints(graph), ['POST /orders']);
+});
+
+test('Fastify: route-object hooks guard only their own route, not schema or neighbors', () => {
+  const graph = buildFixture('fastify-object-guards');
+  assert.deepEqual(openEndpoints(graph), [
+    'POST /api/neighbor-open',
+    'POST /api/object-open',
+    'POST /api/object-schema-only',
+  ]);
+});
+
+test('Express: a check before a named handler counts, and each route is judged on its own arguments', () => {
+  const graph = buildFixture('express-named-handlers');
+  assert.equal(graph.routes.length, 5, `expected the sample's 5 endpoints, found ${graph.routes.length}`);
+  // router.post('/books', requireAuth, createBook) is protected; a handler named like a check
+  // (updateUser) isn't a check, and a check on the next route doesn't protect the one before it
+  assert.deepEqual(openEndpoints(graph), ['GET /api/books', 'POST /api/notes', 'PUT /api/users/:id']);
+});
+
+test('Flask: login decorators count, while logging and misplaced decorators do not (#123)', () => {
+  const graph = buildFixture('flask-login');
+  // login_required, login_required_json and logged_in_required count; log_call, logging_required and
+  // logged_request are logging, and a check above the route line does nothing
+  assert.equal(graph.routes.length, 7);
+  assert.deepEqual(openEndpoints(graph), [
+    'POST /actions/log-call',
+    'POST /actions/logged',
+    'POST /actions/logging',
+    'POST /actions/misplaced',
+  ]);
+});
+
+test('FastAPI: dependencies are judged by what they check, not only by their name (#112, #117, #102)', () => {
+  const graph = buildFixture('fastapi-dependency-checks');
+  assert.equal(graph.routes.length, 20, `expected the sample's 20 endpoints, found ${graph.routes.length}`);
+  // checks: validate_api_key and validate_jwt (#112); a guard factory's result, a neutral-named factory's
+  // result, a class whose __call__ raises 403 and a neutral name that raises 401 (#117 A, B); a factory's
+  // result on the whole router (#117 C); a list kept in a constant (#117 D); a Depends() kept in a
+  // variable, listed or as a parameter default (#102).
+  // Still open: a schema validator (Depends(validate_payload), @validate), a page number, a lookup that
+  // answers 404 and a factory that checks nothing, however they are passed.
+  assert.deepEqual(openEndpoints(graph), [
+    'PATCH /tickets/{ticket_id}',
+    'POST /catalog',
+    'POST /drafts',
+    'POST /notes/paged',
+    'POST /notes/paged-default',
+    'POST /orders/{order_id}/copy',
+    'POST /orders/{order_id}/export',
+    'POST /orders/{order_id}/notes',
+    'PUT /tickets/{ticket_id}',
+  ]);
+});
+
+test("Hono routers under arbitrary variable names are scanned, and mounts compose (#98)", () => {
+  const graph = buildFixture("hono-named-routers");
+  const paths = graph.routes.map((r) => `${r.m} ${r.p}`).sort();
+  // routes on frentes/croquis (arbitrary names) appear under their router prefixes
+  for (const suffix of ["frentes/lista", "frentes/vieja", "croquis/mapa", "health"]) {
+    assert.ok(paths.some((p) => p.endsWith(suffix)), `expected a route ending in ${suffix}, got: ${paths}`);
+  }
+  // each module router keeps its own prefix: croquis's mount must not leak onto frentes routes
+  assert.ok(!paths.some((p) => p.endsWith("croquis/lista")), `unexpected cross-router prefix, got: ${paths}`);
 });

@@ -20,11 +20,35 @@ test('JavaScript: imports and Express endpoints', () => {
   assert.equal(r.routes[0].var, 'router');
 });
 
+test("JavaScript: requests through an app's own API helpers, with the method from the name or the first argument", () => {
+  const r = extract([
+    `import { apiGet, apiSend, httpPost } from '../client';`,
+    `export const list = () => apiGet<Task[], Meta>('/tasks', filters);`,
+    'export const edit = (id) => apiSend<Task>(\'PATCH\', `/tasks/${id}`, body);',
+    `export const note = () => httpPost('/notes', body);`,
+    'export const close = (id) => apiSend(\'patch\', `/tasks/${id}/close`);',
+    `session.log(requestedBy('DELETE', '/audit'));`,
+    `requestAnimationFrame(() => draw('/static/x'));`,
+  ].join('\n'), 'typescript', 'app/api/tasks.ts');
+  assert.deepEqual(r.calls.map((c) => `${c.method} ${c.path}`), ['GET /tasks', 'PATCH /tasks/${x}', 'POST /notes', 'PATCH /tasks/${x}/close', 'null /audit']);
+});
+
 test('Next.js app router: each exported method is an endpoint at the folder path', () => {
   assert.deepEqual(
     routes(`export async function GET(req) { return Response.json([]) }\nexport async function POST(req) {}\n`, 'typescript', 'web/app/api/orders/route.ts'),
     ['GET /api/orders', 'POST /api/orders'],
   );
+});
+
+test('Next.js route files are named exactly route.ts: Angular routing files are not endpoints', () => {
+  const src = `export async function GET(req) {}\nexport const ORDERS_ROUTES = [];\n`;
+  // a route handler at the root of app/ still counts
+  assert.deepEqual(routes(src, 'typescript', 'web/app/route.ts'), ['GET /']);
+  assert.deepEqual(routes(src, 'typescript', 'src/app/route.js'), ['GET /']);
+  // Angular keeps its screen routing in files like orders.route.ts and app.routes.ts under src/app/
+  assert.deepEqual(routes(src, 'typescript', 'src/app/features/orders/orders.route.ts'), []);
+  assert.deepEqual(routes(src, 'typescript', 'src/app/app.routes.ts'), []);
+  assert.deepEqual(routes(src, 'typescript', 'src/app/reports/myroute.ts'), []);
 });
 
 test('Flask: blueprint prefix, methods list and handler docstring', () => {
@@ -72,6 +96,19 @@ test('web requests: fetch with template strings and axios with a method', () => 
   const calls = r.calls.map((c) => `${c.method || '*'} ${c.path}`);
   assert.ok(calls.includes('* /api/orders/${x}'), calls.join(', '));
   assert.ok(calls.includes('POST /api/orders/'), calls.join(', '));
+});
+
+test('comments: a /* inside a string is not a comment, so the code after it is still read', () => {
+  const r = extract([
+    `import { Hono } from 'hono';`,
+    `const app = new Hono();`,
+    `app.use('/api/*', cors());`,
+    `app.get('/api/items', list);`,
+    `app.post('/api/items', create);`,
+    `/** Health check. */`,
+    `app.get('/health', ok); // for the load balancer`,
+  ].join('\n'), 'typescript', 'server/src/index.ts');
+  assert.deepEqual(r.routes.map((x) => `${x.method} ${x.path} :${x.line}`), ['GET /api/items :4', 'POST /api/items :5', 'GET /health :7']);
 });
 
 test('flattenTemplates replaces every ${…} with a placeholder, nested or not', () => {
